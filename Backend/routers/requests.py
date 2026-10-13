@@ -12,10 +12,11 @@ Statuses: pending_tower_head -> pending_app_owner -> pending_it_review
           -> approved | rejected | cancelled
 """
 
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from database.database import SessionLocal
 from database.models import LicenseRequest
@@ -37,6 +38,30 @@ approvals_router = APIRouter(prefix="/api/approvals", tags=["License Approvals"]
 # Schemas
 # ============================================================
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_PLACEHOLDER_DOMAINS = {
+    "licenseportal.onmicrosoft.com",
+    "company.com", "example.com", "example.org", "example.net",
+    "test.com", "test.local", "localhost", "local", "invalid",
+}
+
+
+def _reject_placeholder(v: str, field: str) -> str:
+    domain = v.strip().lower().rsplit("@", 1)[-1] if "@" in v else ""
+    if (
+        domain in _PLACEHOLDER_DOMAINS
+        or domain.startswith("example.")
+        or domain.endswith(".example")
+        or domain.startswith("test.")
+        or domain.endswith(".test")
+    ):
+        raise ValueError(
+            f"{field} looks like a demo address ({v.strip()}) — "
+            "use a real mailbox (demo domains bounce: 550 5.4.310)"
+        )
+    return v
+
+
 class LicenseRequestCreate(BaseModel):
     application_name: str = Field(min_length=1, max_length=255)
     license_name: str = Field(min_length=1, max_length=255)
@@ -56,6 +81,27 @@ class LicenseRequestCreate(BaseModel):
     tower_head_email: str = Field(min_length=3, max_length=255)
     app_owner_name: str = Field(min_length=1, max_length=255)
     app_owner_email: str = Field(min_length=3, max_length=255)
+
+    @field_validator("requested_for_email", "tower_head_email",
+                     "app_owner_email")
+    @classmethod
+    def _valid_email(cls, v, info):
+        v = str(v or "").strip()
+        if not _EMAIL_RE.match(v):
+            raise ValueError("must be a valid email address (name@domain.com)")
+        return _reject_placeholder(v, info.field_name)
+
+    @field_validator("submitted_by_email")
+    @classmethod
+    def _valid_optional_email(cls, v, info):
+        if v is None:
+            return None
+        v = str(v).strip()
+        if not v:
+            return None
+        if not _EMAIL_RE.match(v):
+            raise ValueError("must be a valid email address (name@domain.com)")
+        return _reject_placeholder(v, info.field_name)
 
 
 class ApprovalDecision(BaseModel):
@@ -243,11 +289,19 @@ def create_request(payload: LicenseRequestCreate):
         db.refresh(req)
 
         # 1) approval mail to Tower Head (the actual "mail process")
-        notify_approval_request(req, "Tower Head", req.tower_head_token)
+        th_sent = bool(
+            notify_approval_request(req, "Tower Head", req.tower_head_token)
+        )
         # 2) confirmation to the IT member who submitted
-        notify_status(req, "pending_tower_head")
+        confirm_sent = bool(notify_status(req, "pending_tower_head"))
 
-        return _serialize(req)
+        payload_out = _serialize(req)
+        payload_out["mail"] = {
+            "tower_head_email": req.tower_head_email,
+            "tower_head_email_sent": th_sent,
+            "submitter_confirmation_sent": confirm_sent,
+        }
+        return payload_out
     finally:
         db.close()
 

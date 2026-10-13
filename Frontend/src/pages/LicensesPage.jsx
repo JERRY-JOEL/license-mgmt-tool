@@ -884,6 +884,8 @@ const LicensesPage = () => {
     justification: '',
     requested_for: '',
     requested_for_email: '',
+    submitted_by: '',
+    submitted_by_email: '',
     tower_head_name: '',
     tower_head_email: '',
     app_owner_name: '',
@@ -969,11 +971,29 @@ const LicensesPage = () => {
     if (showRequestsModal) loadRequests();
   }, [showRequestsModal]);
 
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const PLACEHOLDER_DOMAINS = [
+    'licenseportal.onmicrosoft.com', 'company.com',
+    'example.com', 'example.org', 'example.net', 'test.com',
+  ];
+  const isPlaceholderEmail = (v) => {
+    const s = String(v || '').trim().toLowerCase();
+    if (!EMAIL_RE.test(s)) return true;
+    const domain = s.split('@')[1] || '';
+    return PLACEHOLDER_DOMAINS.includes(domain)
+      || domain.startsWith('example.') || domain.endsWith('.example')
+      || domain.startsWith('test.') || domain.endsWith('.test');
+  };
+
   const openSubmitModal = () => {
+    const loginEmail = String(user?.email || '').trim();
     setNewReq((r) => ({
       ...r,
-      submitted_by: user?.name || 'IT Team',
-      submitted_by_email: user?.email || '',
+      submitted_by: r.submitted_by || user?.name || 'IT Team',
+      // Prefill only when the login email is real — the demo SSO
+      // identity used a fake domain that caused Exchange NDRs.
+      submitted_by_email: r.submitted_by_email
+        || (loginEmail && !isPlaceholderEmail(loginEmail) ? loginEmail : ''),
     }));
     setShowSubmitModal(true);
   };
@@ -981,6 +1001,7 @@ const LicensesPage = () => {
   const handleSubmitRequest = async () => {
     const required = [
       'license_name', 'requested_for', 'requested_for_email',
+      'submitted_by', 'submitted_by_email',
       'tower_head_name', 'tower_head_email',
       'app_owner_name', 'app_owner_email',
     ];
@@ -990,25 +1011,52 @@ const LicensesPage = () => {
       setTimeout(() => setError(''), 4000);
       return;
     }
+    const emailFields = [
+      ['requested_for_email', 'User Email'],
+      ['submitted_by_email', 'Your Work Email'],
+      ['tower_head_email', 'Tower Head Email'],
+      ['app_owner_email', 'Application Owner Email'],
+    ];
+    const badFormat = emailFields.find(([k]) => !EMAIL_RE.test(String(newReq[k] || '').trim()));
+    if (badFormat) {
+      setError(`${badFormat[1]} must be a valid email address (name@domain.com).`);
+      setTimeout(() => setError(''), 5000);
+      return;
+    }
+    const placeholder = emailFields.find(([k]) => isPlaceholderEmail(newReq[k]));
+    if (placeholder) {
+      setError(
+        `${placeholder[1]} looks like a demo address (${String(newReq[placeholder[0]]).trim()}). `
+        + 'Use a real mailbox — demo domains bounce (550 5.4.310) and no mail is delivered.'
+      );
+      setTimeout(() => setError(''), 6000);
+      return;
+    }
     setSubmitting(true);
     try {
       const payload = {
         ...newReq,
         quantity: Number(newReq.quantity) || 1,
-        submitted_by: user?.name || 'IT Team',
-        submitted_by_email: user?.email || '',
+        submitted_by: String(newReq.submitted_by || '').trim() || user?.name || 'IT Team',
+        submitted_by_email: String(newReq.submitted_by_email || '').trim(),
       };
       const res = await createLicenseRequest(payload);
       setShowSubmitModal(false);
+      const mail = res.data?.mail;
+      const mailNote = mail
+        ? (mail.tower_head_email_sent
+          ? `Approval email sent to ${mail.tower_head_email}.`
+          : 'WARNING: approval email could not be delivered — check the Tower Head email address.')
+        : `Approval email sent to ${res.data.tower_head.name}.`;
       setSuccess(
-        `Request ${res.data.request_id} submitted — approval email sent to `
-        + `${res.data.tower_head.name}. Track it under "Requests".`
+        `Request ${res.data.request_id} submitted — ${mailNote} Track it under "Requests".`
       );
       setNewReq((r) => ({
         license_name: '', license_type: r.license_type,
         application_name: r.application_name,
         quantity: 1, request_type: 'New License', priority: 'Normal',
         justification: '', requested_for: '', requested_for_email: '',
+        submitted_by: '', submitted_by_email: '',
         tower_head_name: '', tower_head_email: '',
         app_owner_name: '', app_owner_email: '',
       }));
@@ -1734,6 +1782,30 @@ const LicensesPage = () => {
             />
           </div>
           <div style={{ fontWeight: 700, fontSize: 12, textTransform: 'uppercase', color: '#94a3b8', marginTop: 4 }}>
+            Raised by (IT Team — receives status emails)
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label className="label">Your Name *</label>
+              <input
+                className="input"
+                placeholder="e.g. Jerry Joel"
+                value={newReq.submitted_by}
+                onChange={(e) => setNewReq((r) => ({ ...r, submitted_by: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Your Work Email *</label>
+              <input
+                className="input"
+                type="email"
+                placeholder="you@clouddestinations.com"
+                value={newReq.submitted_by_email}
+                onChange={(e) => setNewReq((r) => ({ ...r, submitted_by_email: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div style={{ fontWeight: 700, fontSize: 12, textTransform: 'uppercase', color: '#94a3b8', marginTop: 4 }}>
             Approvers (receive approval emails)
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -1778,7 +1850,7 @@ const LicensesPage = () => {
           </div>
 
           <div style={{ fontSize: 12, color: 'var(--text-muted, #64748b)' }}>
-            Raised by: <b>{user?.name || 'IT Team'}</b> ({user?.email || 'no email'})
+            Status emails go to the <b>Your Work Email</b> address above.
           </div>
         </div>
       </Modal>

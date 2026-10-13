@@ -19,7 +19,7 @@ export const AuthProvider = ({ children }) => {
     const mockUser = {
       id: credentials.id || '1',
       name: credentials.username || 'Admin User',
-      email: credentials.email || 'admin@company.com',
+      email: credentials.email || '',
       role: credentials.role || 'Enterprise Admin',
       provider: credentials.provider || 'Direct Login',
       avatar: credentials.avatar || credentials.username?.[0]?.toUpperCase() || 'A',

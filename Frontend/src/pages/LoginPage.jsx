@@ -125,7 +125,6 @@ const LoginPage = () => {
             onClick={() => {
               login({
                 username: 'Office 365 Admin',
-                email: 'admin@licenseportal.onmicrosoft.com',
                 provider: 'Office 365',
                 role: 'Global Admin',
                 avatar: 'O365',
